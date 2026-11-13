@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Gerrit 工作台",
+    "description": "查看出站与入站 Gerrit 评审，提供带语法高亮的代码 Diff，并可拉起内嵌的 AI 审查会话。"
+  }
+}

@@ -1,0 +1,7 @@
+# Bundle patch: install the plugin row with schema defaults only. The Gerrit
+# server address and the credentials are personal data, so they are not part of
+# the package: configure them after installing, on the plugin card page
+# (Plugins → Gerrit workbench → 配置), which writes them into the profile.
+- insert:
+    - id: gerrit-workbench
+      name: dsh-gerrit-workbench

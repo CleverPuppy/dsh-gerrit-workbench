@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Gerrit workbench",
+    "description": "Reviews outgoing and incoming Gerrit changes with a syntax-highlighted diff and an embedded AI review session."
+  }
+}

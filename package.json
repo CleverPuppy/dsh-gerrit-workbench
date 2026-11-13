@@ -1,0 +1,59 @@
+{
+  "name": "dsh-gerrit-workbench",
+  "version": "0.1.0",
+  "description": "DSH Web plugin: a Gerrit review workbench with syntax-highlighted diffs, inline comments and an embedded AI review session.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "gerrit",
+    "code-review",
+    "review"
+  ],
+  "license": "MIT",
+  "author": "penghui ding",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CleverPuppy/dsh-gerrit-workbench.git"
+  },
+  "homepage": "https://github.com/CleverPuppy/dsh-gerrit-workbench#readme",
+  "bugs": {
+    "url": "https://github.com/CleverPuppy/dsh-gerrit-workbench/issues"
+  },
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "gerrit.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "node --check index.js && node --check client.js && node --check gerrit.js",
+    "test": "node dev/expansion.mjs && node dev/review.mjs && node dev/sessions.mjs && node dev/tokenizer.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}
