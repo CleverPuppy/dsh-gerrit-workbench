@@ -56,24 +56,40 @@ function buildRows() {
   check('folded runs exist', gaps.length >= 2, `got ${gaps.length}`)
   check('runs are expandable', gaps.every(gap => gap.expandable === true))
   check('first run count', gaps[0].count > 0, `${gaps[0].count}`)
+  check('runs carry their hidden rows', gaps.every(gap => gap.hidden.length === gap.count))
 }
 
-// 2. One click reveals exactly 20 lines and leaves the rest folded.
+// 2. The two edges reveal independently, like Gerrit's above / below buttons.
 {
   const segments = segmentRows(buildRows())
   const gap = expandSegments(segments, {}).find(block => block.kind === 'gap')
-  const first = expandSegments(segments, { [gap.key]: 20 })
-  const firstGap = first.find(block => block.kind === 'gap')
-  const revealed = first.find(block => block.kind === 'rows' && block.rows.some(row => row.s === 'line 1'))
-  check('20 lines revealed', revealed !== undefined, JSON.stringify(first.map(b => b.kind)))
-  check('remaining count shrinks', firstGap.count === gap.count - 20, `${firstGap.count} vs ${gap.count}`)
+  const above = expandSegments(segments, { [gap.key]: { above: 20, below: 0 } })
+  const aboveRows = above.filter(block => block.kind === 'rows').flatMap(block => block.rows)
+  check('above reveals the first hidden rows', gap.hidden.slice(0, 20).every(row => aboveRows.includes(row)))
+  check('above leaves the rest folded', above.some(block => block.kind === 'gap' && block.count === gap.count - 20))
+
+  const below = expandSegments(segments, { [gap.key]: { above: 0, below: 20 } })
+  const belowRows = below.filter(block => block.kind === 'rows').flatMap(block => block.rows)
+  const tail = gap.hidden.slice(gap.hidden.length - 20)
+  check('below reveals the last hidden rows', tail.every(row => belowRows.includes(row)))
+  check('below leaves the rest folded', below.some(block => block.kind === 'gap' && block.count === gap.count - 20))
+
+  const both = expandSegments(segments, { [gap.key]: { above: 20, below: 15 } })
+  const bothGap = both.find(block => block.kind === 'gap')
+  check('both edges shrink the same run', bothGap !== undefined && bothGap.count === gap.count - 35, `${bothGap?.count} vs ${gap.count}`)
+  const overlapReveal = Object.fromEntries(
+    segmentRows(buildRows())
+      .filter(segment => segment.kind === 'gap' && segment.expandable)
+      .map(segment => [segment.key, { above: segment.hidden.length, below: segment.hidden.length }]),
+  )
+  check('above wins the overlap when over-revealed', expandSegments(segments, overlapReveal).every(block => block.kind === 'rows'))
 }
 
 // 3. Revealing everything removes the run entirely.
 {
   const segments = segmentRows(buildRows())
   const gaps = expandSegments(segments, {}).filter(block => block.kind === 'gap')
-  const revealedAll = Object.fromEntries(gaps.map(gap => [gap.key, gap.count]))
+  const revealedAll = Object.fromEntries(gaps.map(gap => [gap.key, { above: gap.count, below: 0 }]))
   const blocks = expandSegments(segments, revealedAll)
   check('no runs left after reveal-all', blocks.every(block => block.kind === 'rows'), JSON.stringify(blocks.map(b => b.kind)))
   const rows = blocks.flatMap(block => block.rows ?? [])
@@ -89,13 +105,18 @@ function buildRows() {
   check('compacted count reported', compacted !== undefined && compacted.count === 500, `${compacted === undefined ? 'none' : compacted.count}`)
 }
 
-// 5. Reveal counts beyond the run are clamped.
+// 5. Reveal counts beyond the run are clamped, and a legacy numeric count still works.
 {
   const segments = segmentRows(buildRows())
   const gaps = expandSegments(segments, {}).filter(block => block.kind === 'gap')
-  const huge = Object.fromEntries(gaps.map(gap => [gap.key, 10_000]))
+  const huge = Object.fromEntries(gaps.map(gap => [gap.key, { above: 10_000, below: 10_000 }]))
   const blocks = expandSegments(segments, huge)
   check('over-reveal is clamped', blocks.every(block => block.kind === 'rows'))
+
+  const legacyGap = gaps[0]
+  const legacy = expandSegments(segments, { [legacyGap.key]: 20 })
+  const legacyRows = legacy.filter(block => block.kind === 'rows').flatMap(block => block.rows)
+  check('legacy numeric reveal still opens from the top', legacyGap.hidden.slice(0, 20).every(row => legacyRows.includes(row)))
 }
 
 console.log(failures === 0 ? '\nall expansion checks passed' : `\n${failures} check(s) failed`)

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Side-by-side diffs no longer let a long line paint over the opposite column:
+  lines wrap by default, and with wrapping off the diff table grows and scrolls
+  horizontally instead of overlapping.
+- Folded unchanged runs use Gerrit's bar with line counts:
+  `+20 above · Show 612 common lines · +20 below` (Shift+click reveals all).
+  Runs can be opened from either edge; the old top-only behaviour is still
+  accepted when restoring an open page.
+- Change cards in the left column now show Owner in addition to Repo and Branch.
+- The AI review pane can be resized by dragging its left edge (double-click
+  resets; arrow keys nudge) and maximized / restored from its header. The width
+  is remembered locally.
+
 ## 0.1.0
 
 First public release.

@@ -89,6 +89,8 @@ window.__ModuleLoader__.load({
       'detail.patchSet': '补丁集 {number}',
       'detail.patchSet.latest': '最新',
       'detail.owner': '作者',
+      'detail.project': '项目',
+      'detail.branch': '分支',
       'detail.reviewers': '评审人',
       'detail.commits': '提交信息',
       'detail.unknown': '未知',
@@ -96,10 +98,12 @@ window.__ModuleLoader__.load({
       'diff.failed': 'Diff 读取失败',
       'diff.binary': '二进制文件，没有可显示的文本 Diff。',
       'diff.empty': '没有文本改动。',
-      'diff.gap.expand': '展开 {count} 行',
-      'diff.gap.expandMore': '展开 {step} 行（剩余 {rest} 行）',
-      'diff.gap.expandTitle': '点击展开 {step} 行，Shift+点击展开全部',
-      'diff.gap.capped': '{count} 行未加载（大文件）',
+      'diff.gap.above': '上方 +{count} 行',
+      'diff.gap.below': '下方 +{count} 行',
+      'diff.gap.show': '显示 {count} 行公共代码',
+      'diff.gap.aboveTitle': '从上方展开 {step} 行，Shift+点击展开全部',
+      'diff.gap.belowTitle': '从下方展开 {step} 行，Shift+点击展开全部',
+      'diff.gap.showTitle': '展开全部 {count} 行未改动代码',
       'diff.gap.cappedLoad': '{count} 行未加载',
       'diff.gap.cappedTitle': '这段内容没有随文件加载，点击加载整个文件',
       'diff.gap.loadHint': ' · 点击加载整个文件',
@@ -165,6 +169,9 @@ window.__ModuleLoader__.load({
       'ai.subtitle': 'Change {number} · PS {patchSet}',
       'ai.openPanel': '打开 AI 审查面板',
       'ai.closePanel': '收起 AI 面板',
+      'ai.maximize': '最大化 AI 审查窗口',
+      'ai.restore': '还原 AI 审查窗口',
+      'ai.resize': '拖动调整 AI 窗口宽度',
       'ai.start': '开始 AI 审查',
       'ai.newSession': '新会话',
       'ai.creating': '正在创建审查会话…',
@@ -281,6 +288,8 @@ window.__ModuleLoader__.load({
       'detail.patchSet': 'Patch set {number}',
       'detail.patchSet.latest': 'latest',
       'detail.owner': 'Owner',
+      'detail.project': 'Project',
+      'detail.branch': 'Branch',
       'detail.reviewers': 'Reviewers',
       'detail.commits': 'Commit message',
       'detail.unknown': 'unknown',
@@ -288,10 +297,12 @@ window.__ModuleLoader__.load({
       'diff.failed': 'Could not read the diff',
       'diff.binary': 'Binary file — no text diff to show.',
       'diff.empty': 'No textual changes.',
-      'diff.gap.expand': 'Expand {count} lines',
-      'diff.gap.expandMore': 'Expand {step} lines ({rest} left)',
-      'diff.gap.expandTitle': 'Click to expand {step} lines, Shift+click for all',
-      'diff.gap.capped': '{count} lines not loaded (large file)',
+      'diff.gap.above': '+{count} above',
+      'diff.gap.below': '+{count} below',
+      'diff.gap.show': 'Show {count} common lines',
+      'diff.gap.aboveTitle': 'Show {step} lines above, Shift+click for all',
+      'diff.gap.belowTitle': 'Show {step} lines below, Shift+click for all',
+      'diff.gap.showTitle': 'Show all {count} folded lines',
       'diff.gap.cappedLoad': '{count} lines not loaded',
       'diff.gap.cappedTitle': 'These lines were not sent with the file; click to load the whole file',
       'diff.gap.loadHint': ' · click to load the whole file',
@@ -357,6 +368,9 @@ window.__ModuleLoader__.load({
       'ai.subtitle': 'Change {number} · PS {patchSet}',
       'ai.openPanel': 'Open the AI review panel',
       'ai.closePanel': 'Collapse the AI panel',
+      'ai.maximize': 'Maximize the AI review window',
+      'ai.restore': 'Restore the AI review window',
+      'ai.resize': 'Drag to resize the AI review window',
       'ai.start': 'Start AI review',
       'ai.newSession': 'New session',
       'ai.creating': 'Creating the review session…',
@@ -1092,9 +1106,28 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Apply the reader's reveal counts to the folded runs.
+     * Normalize one folded run's reveal state. A plain number is the old
+     * top-only count, kept so a page that was already open keeps working.
+     * @param {unknown} value - `{ above, below }` or a legacy number.
+     * @returns {{ above: number, below: number }} non-negative counts.
+     */
+    function revealOf(value) {
+      if (typeof value === 'number') return { above: Math.max(0, value), below: 0 }
+      if (value === null || typeof value !== 'object') return { above: 0, below: 0 }
+      return {
+        above: Math.max(0, Number(value.above) || 0),
+        below: Math.max(0, Number(value.below) || 0),
+      }
+    }
+
+    /**
+     * Apply the reader's reveal counts to the folded runs. A run can be opened
+     * from either edge, matching Gerrit's "+10 above / Show N common lines /
+     * +10 below" bar, so the still-folded rows keep their place between the
+     * two revealed slices.
      * @param {Array<object>} segments - folded segments.
-     * @param {Record<string, number>} revealed - gap key → lines already revealed.
+     * @param {Record<string, {above: number, below: number}|number>} revealed -
+     *   gap key → lines already revealed from each edge.
      * @returns {Array<object>} blocks: rendered rows, or the run still folded.
      */
     function expandSegments(segments, revealed) {
@@ -1109,11 +1142,24 @@ window.__ModuleLoader__.load({
           continue
         }
         const total = segment.hidden.length
-        const shown = Math.min(total, Math.max(0, Number(revealed[segment.key]) || 0))
-        if (shown > 0) blocks.push({ kind: 'rows', rows: segment.hidden.slice(0, shown) })
-        if (shown < total) {
-          blocks.push({ kind: 'gap', key: segment.key, count: total - shown, total, expandable: true })
+        const record = revealOf((revealed ?? {})[segment.key])
+        const above = Math.min(total, record.above)
+        const below = Math.min(total - above, record.below)
+        if (above > 0) blocks.push({ kind: 'rows', rows: segment.hidden.slice(0, above) })
+        const remaining = total - above - below
+        if (remaining > 0) {
+          blocks.push({
+            kind: 'gap',
+            key: segment.key,
+            count: remaining,
+            total,
+            above,
+            below,
+            expandable: true,
+            hidden: segment.hidden.slice(above, total - below),
+          })
         }
+        if (below > 0) blocks.push({ kind: 'rows', rows: segment.hidden.slice(total - below) })
       }
       return blocks
     }
@@ -1312,6 +1358,9 @@ window.__ModuleLoader__.load({
     const IconPanel = props => svg(['M2.5 3.5h11v9h-11z', 'M10 3.5v9'], props)
     const IconList = props => svg(['M3 4h10', 'M3 8h10', 'M3 12h10'], props)
     const IconComment = props => svg(['M2.6 3.6h10.8v6.4H8.1L5.2 12.6V10H2.6z'], props)
+    const IconUser = props => svg([{ tag: 'circle', attrs: { cx: 8, cy: 5.4, r: 2.5 } }, 'M3.4 13.3c.6-2.4 2.2-3.7 4.6-3.7s4 1.3 4.6 3.7'], props)
+    const IconMaximize = props => svg(['M3 6.5V3h3.5', 'M13 9.5V13H9.5', 'M3 3l4.5 4.5', 'M13 13 8.5 8.5'], props)
+    const IconRestore = props => svg(['M6.5 3v3.5H3', 'M9.5 13V9.5H13', 'M6.5 6.5 3 3', 'M9.5 9.5 13 13'], props)
 
     /** The Gerrit mark shown in the left sidebar panel list. */
     function SidebarIcon({ size, active }) {
@@ -1405,7 +1454,7 @@ window.__ModuleLoader__.load({
 .gwb-dot[data-state="busy"] { background: var(--dsw-alias-state-warn-primary); }
 .gwb-body { flex: 1; min-height: 0; display: flex; position: relative; }
 .gwb-list {
-  width: 306px; min-width: 240px; max-width: 40vw; display: flex; flex-direction: column;
+  width: 336px; min-width: 250px; max-width: 42vw; display: flex; flex-direction: column;
   border-right: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); min-height: 0;
 }
 .gwb-list-head {
@@ -1423,6 +1472,8 @@ window.__ModuleLoader__.load({
 .gwb-row[data-selected] { background: var(--dsw-alias-bg-base); border-color: var(--dsw-alias-border-l2); }
 .gwb-row-subject { font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .gwb-row-meta { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--dsw-alias-label-secondary); min-width: 0; }
+.gwb-row-owner { display: inline-flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.gwb-row-sep { flex: none; opacity: .65; }
 .gwb-mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
 .gwb-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .gwb-row-foot { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--dsw-alias-label-secondary); min-width: 0; }
@@ -1493,8 +1544,12 @@ window.__ModuleLoader__.load({
 .gwb-hoveronly { opacity: 0; transition: opacity .12s ease; }
 .gwb-file-head:hover .gwb-hoveronly, .gwb-line:hover .gwb-hoveronly { opacity: 1; }
 .gwb-diff { overflow: auto; }
-.gwb-diff-table { border-collapse: collapse; width: 100%; table-layout: fixed; }
-.gwb-diff-table[data-wrap="1"] { table-layout: auto; }
+/* Auto layout when lines are not wrapped: a long line makes the table (and
+   the diff scroller) wider instead of painting over the opposite column of the
+   side-by-side view. Fixed layout is only safe once white-space: pre-wrap
+   keeps every cell inside its column. */
+.gwb-diff-table { border-collapse: collapse; width: 100%; table-layout: auto; }
+.gwb-diff-table[data-wrap="1"] { table-layout: fixed; }
 .gwb-diff-table td { padding: 0; vertical-align: top; }
 .gwb-num {
   width: 50px; padding: 0 7px !important; text-align: right; user-select: none;
@@ -1540,11 +1595,28 @@ window.__ModuleLoader__.load({
 }
 .gwb-gap:hover { color: var(--dsw-alias-label-primary); }
 .gwb-gap[disabled] { cursor: default; }
+/* Gerrit's folded-run bar: "+10 above | Show 612 common lines | +10 below". */
+.gwb-gap-bar {
+  display: flex; align-items: center; gap: 4px; padding: 2px 10px;
+  background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary);
+  border-top: 1px dashed var(--dsw-alias-border-l1);
+  border-bottom: 1px dashed var(--dsw-alias-border-l1);
+  min-height: 22px; font-size: 11px;
+}
+.gwb-gap-step, .gwb-gap-show {
+  display: inline-flex; align-items: center; gap: 5px; flex: 1 1 0; min-width: 0;
+  border: 0; background: transparent; color: inherit; font: inherit; font-size: 11px;
+  padding: 2px 4px; border-radius: 5px; cursor: pointer; white-space: nowrap;
+}
+.gwb-gap-step { justify-content: flex-start; }
+.gwb-gap-step[data-side="below"] { justify-content: flex-end; }
+.gwb-gap-show { justify-content: center; color: var(--dsw-alias-brand-primary); }
+.gwb-gap-step:hover, .gwb-gap-show:hover { background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); }
+.gwb-gap-show:hover { color: var(--dsw-alias-brand-primary); }
 .gwb-capped {
   padding: 6px 14px; font-size: 11px; color: var(--dsw-alias-label-secondary);
   background: var(--dsw-alias-bg-layer-2); border-top: 1px dashed var(--dsw-alias-border-l1);
 }
-.gwb-gap-inner { display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 0; border-top: 1px dashed var(--dsw-alias-border-l1); border-bottom: 1px dashed var(--dsw-alias-border-l1); }
 .gwb-gap-hint { color: var(--dsw-alias-brand-primary); }
 .gwb-reviewed {
   display: inline-flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer;
@@ -1571,9 +1643,31 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-label-primary); white-space: pre-wrap;
 }
 .gwb-ai {
-  width: 428px; min-width: 340px; max-width: 46vw; display: flex; flex-direction: column;
+  width: 428px; min-width: 300px; max-width: 72vw; display: flex; flex-direction: column;
   border-left: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-base); min-height: 0; flex: none;
+  position: relative;
 }
+/* Keep a readable diff column beside the AI pane: the list is 336px wide and
+   the diff keeps at least 360px; the CSS cap is the backstop when the window
+   shrinks, the drag handler applies the same budget. */
+.gwb-body[data-list="open"] .gwb-ai:not([data-maximized]) { max-width: max(300px, calc(100% - 700px)); }
+.gwb-body[data-list="closed"] .gwb-ai:not([data-maximized]) { max-width: max(300px, calc(100% - 360px)); }
+.gwb-ai[data-maximized] {
+  position: absolute; inset: 0; z-index: 12; width: auto !important;
+  min-width: 0; max-width: none; border-left: 0;
+}
+.gwb-ai-resizer {
+  position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; z-index: 9;
+  cursor: col-resize; touch-action: none;
+}
+.gwb-ai-resizer::after {
+  content: ''; position: absolute; left: 2px; top: 0; bottom: 0; width: 1px;
+  background: var(--dsw-alias-border-l2); opacity: .55; transition: opacity .12s ease;
+}
+.gwb-ai-resizer:hover::after, .gwb-ai-resizer:focus-visible::after, .gwb-ai[data-resizing] .gwb-ai-resizer::after {
+  background: var(--dsw-alias-brand-primary); opacity: 1;
+}
+.gwb-ai-resizer:focus-visible { outline: none; }
 .gwb-ai-head {
   display: flex; align-items: center; gap: 8px; padding: 7px 12px; flex: none;
   border-bottom: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1);
@@ -1691,8 +1785,8 @@ window.__ModuleLoader__.load({
         textSelection: null,
         composer: null,
         replyOpen: false,
-        prefs: { split: true, wrap: false, filesOpen: true, listOpen: true },
-        ai: { open: false, phase: 'idle', sessionId: null, changeNumber: null, error: null, notice: null, busy: false, reference: undefined, target: readTarget() },
+        prefs: { split: true, wrap: true, wrapTouched: false, aiWidth: 428, filesOpen: true, listOpen: true },
+        ai: { open: false, maximized: false, phase: 'idle', sessionId: null, changeNumber: null, error: null, notice: null, busy: false, reference: undefined, target: readTarget() },
       }
     }
 
@@ -1705,6 +1799,26 @@ window.__ModuleLoader__.load({
       } catch (_unavailable) {
         return {}
       }
+    }
+
+    /**
+     * Merge the saved display preferences over the defaults.
+     *
+     * Wrapping became the default once the diff had to fit narrow side-by-side
+     * columns; an old `wrap: false` came from the previous default, not from a
+     * click, so it is upgraded once. The wrap toggle records `wrapTouched`, and
+     * from then on the saved value wins.
+     */
+    function resolvePrefs() {
+      const defaults = initialState().prefs
+      const saved = readPrefs()
+      const prefs = { ...defaults, ...saved }
+      if (saved.wrapTouched !== true) prefs.wrap = true
+      const width = Number(prefs.aiWidth)
+      prefs.aiWidth = Number.isFinite(width)
+        ? Math.min(Math.max(Math.round(width), 300), 1200)
+        : defaults.aiWidth
+      return prefs
     }
 
     /** Build the injected face: data reads and session operations bound to one plugin context. */
@@ -1957,8 +2071,20 @@ window.__ModuleLoader__.load({
       /** Set one display preference. */
       function setPref(key, value) {
         const next = { ...state().prefs, [key]: value }
+        if (key === 'wrap') next.wrapTouched = true
+        if (key === 'aiWidth') {
+          const width = Number(value)
+          next.aiWidth = Number.isFinite(width)
+            ? Math.min(Math.max(Math.round(width), 300), 1200)
+            : initialState().prefs.aiWidth
+        }
         savePrefs(next)
         update({ prefs: next })
+      }
+
+      /** Maximize or restore the AI review pane. */
+      function setAiMaximized(maximized) {
+        update({ ai: { ...state().ai, maximized: maximized === true } })
       }
 
       /** Expand or collapse one file section. */
@@ -1970,18 +2096,25 @@ window.__ModuleLoader__.load({
 
       /**
        * Reveal lines of one folded run, Gerrit style: one step of `step` lines
-       * per click, everything on request.
+       * per click from the top ("above") or the bottom ("below") of the run,
+       * everything on request.
        * @param {string} path - file path.
        * @param {string} key - gap identity.
+       * @param {'above'|'below'|'all'} direction - edge to open.
        * @param {number} remaining - lines still hidden in that run.
        * @param {boolean} all - reveal every remaining line.
        */
-      function expandGap(path, key, remaining, all) {
+      function expandGap(path, key, direction, remaining, all) {
         const current = state()
         const perPath = { ...(current.openGaps[path] ?? {}) }
-        const revealed = perPath[key] ?? 0
-        const step = all === true ? remaining : Math.min(GAP_STEP, remaining)
-        perPath[key] = revealed + step
+        const revealed = revealOf(perPath[key])
+        // The middle button ("Show N common lines") always opens the run;
+        // the side buttons take one step, Shift opens everything.
+        const step = all === true || direction === 'all' ? remaining : Math.min(GAP_STEP, remaining)
+        const next = { ...revealed }
+        if (direction === 'below') next.below = revealed.below + step
+        else next.above = revealed.above + step
+        perPath[key] = next
         update({ openGaps: { ...current.openGaps, [path]: perPath } })
       }
 
@@ -1994,7 +2127,7 @@ window.__ModuleLoader__.load({
         if (entry === undefined || entry.value === null) return
         const perPath = {}
         for (const segment of segmentRows(entry.value.rows)) {
-          if (segment.kind === 'gap' && segment.expandable) perPath[segment.key] = segment.hidden.length
+          if (segment.kind === 'gap' && segment.expandable) perPath[segment.key] = { above: segment.hidden.length, below: 0 }
         }
         update({ openGaps: { ...current.openGaps, [path]: perPath } })
       }
@@ -2420,7 +2553,7 @@ window.__ModuleLoader__.load({
       /** Open or collapse the AI panel; opening resolves this change's session. */
       function setAiOpen(open) {
         if (open === false) {
-          update({ ai: { ...state().ai, open: false } })
+          update({ ai: { ...state().ai, open: false, maximized: false } })
           return
         }
         const detail = state().detail.value
@@ -2716,6 +2849,7 @@ window.__ModuleLoader__.load({
         closeReply,
         publishReview,
         setAiOpen,
+        setAiMaximized,
         applySessionMatch,
         syncSessionForPatch,
         ensureSession,
@@ -2867,8 +3001,10 @@ window.__ModuleLoader__.load({
           h('span', null, t('action.refresh'))))
     }
 
-    /** One row of the change list. */
+    /** One row of the change list: subject, owner / repo / branch, then the counts. */
     const ChangeRow = memo(function ChangeRow({ change, selected, onSelect, t, locale }) {
+      const owner = change.owner === null || change.owner === undefined ? '' : (change.owner.name || change.owner.username)
+      const ownerName = owner === '' ? t('detail.unknown') : owner
       return h('button', {
         type: 'button',
         className: 'gwb-row',
@@ -2877,9 +3013,13 @@ window.__ModuleLoader__.load({
       },
       h('span', { className: 'gwb-row-subject' }, change.subject),
       h('span', { className: 'gwb-row-meta' },
-        h('span', { className: 'gwb-mono gwb-ellipsis', title: `${change.project} · ${change.branch}` }, change.project),
-        h('span', null, '·'),
-        h('span', { className: 'gwb-mono gwb-ellipsis' }, change.branch)),
+        h('span', { className: 'gwb-row-owner gwb-ellipsis', title: `${t('detail.owner')}: ${ownerName}` },
+          h(IconUser, { size: 11 }),
+          h('span', { className: 'gwb-ellipsis' }, ownerName))),
+      h('span', { className: 'gwb-row-meta' },
+        h('span', { className: 'gwb-mono gwb-ellipsis', title: `${t('detail.project')}: ${change.project}` }, change.project),
+        h('span', { className: 'gwb-row-sep' }, '·'),
+        h('span', { className: 'gwb-mono gwb-ellipsis', title: `${t('detail.branch')}: ${change.branch}` }, change.branch)),
       h('span', { className: 'gwb-row-foot' },
         h('span', { className: 'gwb-mono' }, `#${change.number}`),
         change.patchSet > 0 ? h('span', { className: 'gwb-chip' }, `PS ${change.patchSet}`) : null,
@@ -2942,30 +3082,47 @@ window.__ModuleLoader__.load({
             }, h(IconQuote, { size: 11 })))))
     }
 
-    /** One folded-run row: Gerrit's "expand context" affordance. */
+    /**
+     * One folded-run row: Gerrit's "expand context" bar. The three controls
+     * mirror the image this workbench is modelled on — "+10 above",
+     * "Show 612 common lines", "+10 below" — with Shift+click for everything.
+     */
     function GapRow({ block, columns, t, onExpand, onLoadFull }) {
-      const capped = block.expandable !== true
+      if (block.expandable !== true) {
+        return h('tr', null,
+          h('td', { className: 'gwb-gap-cell', colSpan: columns },
+            h('button', {
+              type: 'button',
+              className: 'gwb-gap',
+              title: t('diff.gap.cappedTitle'),
+              onClick: () => onLoadFull(),
+            },
+            h(IconChevrons, { size: 11 }),
+            h('span', null, t('diff.gap.cappedLoad', { count: block.count })),
+            h('span', { className: 'gwb-gap-hint' }, t('diff.gap.loadHint')))))
+      }
       const step = Math.min(GAP_STEP, block.count)
-      const label = capped
-        ? t('diff.gap.cappedLoad', { count: block.count })
-        : block.count > step
-          ? t('diff.gap.expandMore', { step, rest: block.count })
-          : t('diff.gap.expand', { count: block.count })
+      const expand = direction => (event) => onExpand(block.key, direction, block.count, event.shiftKey === true)
       return h('tr', null,
         h('td', { className: 'gwb-gap-cell', colSpan: columns },
-          h('button', {
-            type: 'button',
-            className: 'gwb-gap',
-            title: capped ? t('diff.gap.cappedTitle') : t('diff.gap.expandTitle', { step }),
-            onClick: (event) => {
-              if (capped) onLoadFull()
-              else onExpand(block.key, block.count, event.shiftKey === true)
+          h('div', { className: 'gwb-gap-bar' },
+            h('button', {
+              type: 'button', className: 'gwb-gap-step',
+              title: t('diff.gap.aboveTitle', { step }),
+              onClick: expand('above'),
+            }, h('span', null, t('diff.gap.above', { count: step }))),
+            h('button', {
+              type: 'button', className: 'gwb-gap-show',
+              title: t('diff.gap.showTitle', { count: block.count }),
+              onClick: expand('all'),
             },
-          },
-          h('span', { className: 'gwb-gap-inner' },
-            h(IconChevrons, { size: 12 }),
-            h('span', null, label),
-            capped ? h('span', { className: 'gwb-gap-hint' }, t('diff.gap.loadHint')) : null))))
+            h(IconChevrons, { size: 11 }),
+            h('span', null, t('diff.gap.show', { count: block.count }))),
+            h('button', {
+              type: 'button', className: 'gwb-gap-step', 'data-side': 'below',
+              title: t('diff.gap.belowTitle', { step }),
+              onClick: expand('below'),
+            }, h('span', null, t('diff.gap.below', { count: step }))))))
     }
 
     /** Inline comment editor anchored under a selected run of diff rows. */
@@ -3298,7 +3455,10 @@ window.__ModuleLoader__.load({
         return map
       }, [comments, drafts])
       const revealed = openGaps ?? {}
-      const revealedCount = Object.values(revealed).reduce((sum, value) => sum + (Number(value) || 0), 0)
+      const revealedCount = Object.values(revealed).reduce((sum, value) => {
+        const record = revealOf(value)
+        return sum + record.above + record.below
+      }, 0)
       const capped = diffValue !== null && diffValue.capped === true
       const selectedHere = selection !== null && selection !== undefined && selection.path === file.path
       let body
@@ -3334,7 +3494,7 @@ window.__ModuleLoader__.load({
             onTextSelect: found => face.setTextSelection(file.path, found),
             onClearTextSelection: () => face.clearTextSelection(),
             onSelectExtend: (anchor, index) => face.extendSelection(file.path, anchor, index),
-            onExpandGap: (key, remaining, all) => face.expandGap(file.path, key, remaining, all),
+            onExpandGap: (key, direction, remaining, all) => face.expandGap(file.path, key, direction, remaining, all),
             onLoadFull: () => { void face.loadFullFile(file.path) },
           }),
           capped ? h('div', { className: 'gwb-capped' }, t('diff.capped')) : null)
@@ -3769,11 +3929,22 @@ window.__ModuleLoader__.load({
       }, h(IconClose, { size: 10 })))
     }
 
-    /** The embedded AI Session pane. */
+    /** Clamp the AI pane width to something the embedded Conversation can use. */
+    function clampAiWidth(value, max) {
+      const viewport = typeof window === 'undefined' ? 1440 : window.innerWidth
+      const min = 300
+      const fallback = Math.max(min, Math.round(viewport * 0.78))
+      const limit = Number.isFinite(Number(max)) ? Math.max(min, Math.round(Number(max))) : fallback
+      const width = Number(value)
+      return Math.min(Math.max(Number.isFinite(width) ? Math.round(width) : 428, min), limit)
+    }
+
+    /** The embedded AI Session pane, resizable from its left edge and maximizable. */
     function AiPane({ state, face, pageProps }) {
       const { t } = face
       const { renderSlot, SessionProvider } = pageProps
       const ai = state.ai
+      const prefs = state.prefs
       const meta = state.meta.value
       const workspaces = useSnapshot(face.hooks.workspaces)
       const resolved = face.resolveTarget()
@@ -3800,6 +3971,73 @@ window.__ModuleLoader__.load({
       const subtitle = state.detail.value === null
         ? ''
         : t('ai.subtitle', { number: state.detail.value.number, patchSet: state.detail.value.patchSet })
+      // The pane keeps its own width while the pointer is down so a drag does
+      // not rewrite localStorage on every move; the pointer-up writes once.
+      const [width, setWidth] = useState(() => clampAiWidth(prefs.aiWidth))
+      const [resizing, setResizing] = useState(false)
+      const widthRef = useRef(width)
+      const dragRef = useRef(null)
+      const asideRef = useRef(null)
+      // Leave room for the 336px list and a 360px diff column unless the list
+      // is hidden; the CSS cap is the backstop when the window itself shrinks.
+      const maxPaneWidth = () => {
+        const node = asideRef.current
+        const parent = node === null || node === undefined ? null : node.parentElement
+        const total = parent === null
+          ? (typeof window === 'undefined' ? 1440 : window.innerWidth)
+          : parent.clientWidth
+        return Math.max(300, total - (prefs.listOpen === false ? 360 : 700))
+      }
+      const commitWidth = (next, max) => {
+        const clamped = clampAiWidth(next, max)
+        widthRef.current = clamped
+        setWidth(clamped)
+        return clamped
+      }
+      const startResize = (event) => {
+        if (event.button !== 0) return
+        event.preventDefault()
+        const startX = event.clientX
+        const startWidth = widthRef.current
+        setResizing(true)
+        const move = (moveEvent) => {
+          commitWidth(startWidth + (startX - moveEvent.clientX), maxPaneWidth())
+        }
+        const stop = () => {
+          window.removeEventListener('mousemove', move)
+          window.removeEventListener('mouseup', stop)
+          document.body.style.cursor = ''
+          document.body.style.userSelect = ''
+          dragRef.current = null
+          setResizing(false)
+          face.setPref('aiWidth', widthRef.current)
+        }
+        dragRef.current = { move, stop }
+        window.addEventListener('mousemove', move)
+        window.addEventListener('mouseup', stop)
+        document.body.style.cursor = 'col-resize'
+        document.body.style.userSelect = 'none'
+      }
+      const onResizerKey = (event) => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+        event.preventDefault()
+        const delta = event.key === 'ArrowLeft' ? 24 : -24
+        face.setPref('aiWidth', commitWidth(widthRef.current + delta, maxPaneWidth()))
+      }
+      const resetWidth = () => face.setPref('aiWidth', commitWidth(428, maxPaneWidth()))
+      useEffect(() => {
+        const limit = maxPaneWidth()
+        if (widthRef.current <= limit) return
+        face.setPref('aiWidth', commitWidth(widthRef.current, limit))
+      }, [prefs.listOpen])
+      useEffect(() => () => {
+        const drag = dragRef.current
+        if (drag === null) return
+        window.removeEventListener('mousemove', drag.move)
+        window.removeEventListener('mouseup', drag.stop)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+      }, [])
       // A retained session reports `ready` once the Host has opened it and the
       // client service knows it. Rendering the embedded Conversation before that
       // makes the framework ask for a binding that does not exist yet
@@ -3850,12 +4088,38 @@ window.__ModuleLoader__.load({
           h(Boundary, { retryLabel: t('action.retry') },
             h(SessionProvider, { session: reference }, renderSlot('gerrit.ai.session', {}))))
       }
-      return h('aside', { className: 'gwb-ai', 'aria-label': t('aria.aiSession') },
+      return h('aside', {
+        className: 'gwb-ai',
+        ref: asideRef,
+        'aria-label': t('aria.aiSession'),
+        'data-maximized': ai.maximized ? '' : undefined,
+        'data-resizing': resizing ? '' : undefined,
+        style: ai.maximized ? undefined : { width: `${width}px` },
+      },
+        ai.maximized
+          ? null
+          : h('div', {
+            className: 'gwb-ai-resizer',
+            role: 'separator',
+            'aria-orientation': 'vertical',
+            'aria-label': t('ai.resize'),
+            title: t('ai.resize'),
+            tabIndex: 0,
+            onMouseDown: startResize,
+            onKeyDown: onResizerKey,
+            onDoubleClick: resetWidth,
+          }),
         h('div', { className: 'gwb-ai-head' },
           h(IconSparkle, { size: 14 }),
           h('strong', null, t('ai.title')),
           h('span', { className: 'gwb-ellipsis' }, subtitle),
           h('span', { className: 'gwb-spacer' }),
+          h('button', {
+            type: 'button', className: 'gwb-mini',
+            title: ai.maximized ? t('ai.restore') : t('ai.maximize'),
+            'aria-pressed': ai.maximized === true,
+            onClick: () => face.setAiMaximized(!ai.maximized),
+          }, h(ai.maximized ? IconRestore : IconMaximize, { size: 11 })),
           h('button', {
             type: 'button', className: 'gwb-mini', title: t('ai.newSession'),
             onClick: () => { void face.resetSession() },
@@ -4147,7 +4411,7 @@ window.__ModuleLoader__.load({
         h('style', null, CSS),
         h(Boundary, { retryLabel: face.t('action.retry') },
           h(Toolbar, { state, face }),
-          h('div', { className: 'gwb-body' },
+          h('div', { className: 'gwb-body', 'data-list': state.prefs.listOpen === false ? 'closed' : 'open' },
             state.prefs.listOpen === false ? null : h(ChangeList, { state, face }),
             h(ChangeDetail, { state, face }),
             state.ai.open === true ? h(AiPane, { state, face, pageProps: props }) : null,
@@ -4165,7 +4429,7 @@ window.__ModuleLoader__.load({
 
     /** Plugin body: register the sidebar entry, the panel, and the session body. */
     function apply(ctx) {
-      const store = createStore({ ...initialState(), prefs: { ...initialState().prefs, ...readPrefs() } })
+      const store = createStore({ ...initialState(), prefs: resolvePrefs() })
       const face = createFace(ctx, store)
       ctx.effect(() => ctx.locale.register(NS, { en, zh, ja: en, de: en, es: en, fr: en, pt: en, ru: en }), 'gerrit-workbench: dictionaries')
       ctx.effect(() => () => { face.dispose() }, 'gerrit-workbench: session references')
